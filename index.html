@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>我們的小倉庫</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>
+:root{--bg:#eaf3fa;--card:#d6e6f3;--input:#fbfdfe;--text:#1d3447;--accent:#2468ad}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,"Noto Sans TC",sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:640px;margin:0 auto;padding:14px}
+h1{font-size:20px;margin:6px 0 12px;display:flex;justify-content:space-between;align-items:center}
+input,textarea{width:100%;border:1px solid #b7cfe2;border-radius:10px;background:var(--input);color:var(--text);padding:10px;font:inherit;margin-bottom:8px}
+button{border:0;border-radius:10px;background:var(--accent);color:#fff;padding:10px 14px;font:inherit;cursor:pointer}
+button.ghost{background:transparent;color:var(--accent);padding:4px 8px;font-size:14px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs button{flex:1;background:var(--card);color:var(--text)}
+.tabs button.on{background:var(--accent);color:#fff}
+.card{background:var(--card);border-radius:14px;padding:12px;margin-bottom:10px;word-break:break-word}
+.meta{font-size:12px;opacity:.7;display:flex;justify-content:space-between;align-items:center}
+.bub{max-width:82%;padding:8px 12px;border-radius:14px;margin:6px 0;background:var(--card);word-break:break-word;white-space:pre-wrap}
+.bub.me{margin-left:auto;background:var(--accent);color:#fff}
+.bub small{display:block;font-size:11px;opacity:.7}
+.row{display:flex;gap:8px}.row input{margin:0}
+pre{white-space:pre-wrap;margin:6px 0 0;font:inherit}
+img.pv{max-width:100%;border-radius:10px;margin-top:8px}
+.hide{display:none}
+.msgs{min-height:40vh}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div id="login" class="hide">
+  <h1>我們的小倉庫</h1>
+  <input id="em" type="email" placeholder="Email" autocomplete="username">
+  <input id="pw" type="password" placeholder="密碼" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+  <button onclick="login()">登入</button>
+  <p id="err" style="color:#b3261e"></p>
+</div>
+
+<div id="app" class="hide">
+  <h1>我們的小倉庫 <span><button class="ghost" onclick="rename()" id="who"></button><button class="ghost" onclick="logout()">登出</button></span></h1>
+  <div class="tabs">
+    <button id="t-msg" class="on" onclick="setTab('msg')">💬 留言</button>
+    <button id="t-db" onclick="setTab('db')">🗂 資料庫</button>
+  </div>
+
+  <div id="v-msg">
+    <div id="msgs" class="msgs"></div>
+    <div class="row"><input id="mb" placeholder="留言給對方…" onkeydown="if(event.key==='Enter')sendMsg()"><button onclick="sendMsg()">送出</button></div>
+  </div>
+
+  <div id="v-db" class="hide">
+    <div class="card">
+      <input id="ti" placeholder="標題（選填）">
+      <textarea id="ct" rows="3" placeholder="貼上一段文字…"></textarea>
+      <div class="row"><button onclick="addText()">存文字</button><button onclick="$('#fi').click()" style="background:#5b8db8">📎 上傳檔案</button></div>
+      <input id="fi" type="file" class="hide" multiple onchange="addFiles(this.files)">
+      <div id="up" class="meta"></div>
+    </div>
+    <input id="q" placeholder="🔍 搜尋標題、內容、檔名" oninput="drawItems()">
+    <div id="items"></div>
+  </div>
+</div>
+
+</div>
+<script>
+const SUPABASE_URL='https://noszxojrpvjewtttzwer.supabase.co/rest/v1/';
+const SUPABASE_KEY='sb_publishable_P_TXSnNEHaGh5jwDFS5RDA_8EcdalyY';
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=t=>new Date(t).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const size=n=>n>1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';
+let me=null,items=[],msgs=[];
+const myName=()=>me.user_metadata?.name||me.email.split('@')[0];
+
+async function init(){
+  const{data}=await sb.auth.getSession();
+  me=data.session?.user||null;
+  $('#login').classList.toggle('hide',!!me);
+  $('#app').classList.toggle('hide',!me);
+  if(!me)return;
+  $('#who').textContent=myName()+' ✎';
+  await Promise.all([loadMsgs(),loadItems()]);
+  sb.channel('shared')
+    .on('postgres_changes',{event:'*',schema:'public',table:'messages'},loadMsgs)
+    .on('postgres_changes',{event:'*',schema:'public',table:'items'},loadItems)
+    .subscribe();
+}
+async function login(){
+  const{error}=await sb.auth.signInWithPassword({email:$('#em').value.trim(),password:$('#pw').value});
+  if(error)$('#err').textContent='登入失敗：'+error.message;else init();
+}
+async function logout(){await sb.auth.signOut();location.reload()}
+async function rename(){
+  const n=prompt('顯示名稱',myName());if(!n)return;
+  const{data}=await sb.auth.updateUser({data:{name:n.trim()}});
+  me=data.user;$('#who').textContent=myName()+' ✎';
+}
+function setTab(t){
+  for(const k of['msg','db']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
+}
+
+async function loadMsgs(){
+  const{data}=await sb.from('messages').select('*').order('created_at');
+  msgs=data||[];
+  $('#msgs').innerHTML=msgs.map(m=>`<div class="bub ${m.author_id===me.id?'me':''}"><small>${esc(m.author_name)} · ${fmt(m.created_at)}${m.author_id===me.id?` · <a href="#" style="color:inherit" onclick="delMsg('${m.id}');return false">刪除</a>`:''}</small>${esc(m.body)}</div>`).join('')||'<p style="opacity:.6">還沒有留言，說點什麼吧～</p>';
+  window.scrollTo(0,document.body.scrollHeight);
+}
+async function sendMsg(){
+  const b=$('#mb').value.trim();if(!b)return;
+  $('#mb').value='';
+  await sb.from('messages').insert({body:b,author_name:myName()});
+  loadMsgs();
+}
+async function delMsg(id){if(confirm('刪除這則留言？')){await sb.from('messages').delete().eq('id',id);loadMsgs()}}
+
+async function loadItems(){
+  const{data}=await sb.from('items').select('*').order('created_at',{ascending:false});
+  items=data||[];drawItems();
+}
+async function drawItems(){
+  const q=$('#q').value.trim().toLowerCase();
+  const list=items.filter(i=>!q||[i.title,i.content,i.file_name].some(s=>(s||'').toLowerCase().includes(q)));
+  $('#items').innerHTML=list.map(i=>`<div class="card" id="i-${i.id}">
+    <div class="meta"><span>${esc(i.author_name)} · ${fmt(i.created_at)}</span>
+    <span>${i.kind==='text'?`<button class="ghost" onclick="copyText('${i.id}')">複製</button>`:`<button class="ghost" onclick="openFile('${i.id}')">開啟</button>`}${i.author_id===me.id?`<button class="ghost" onclick="delItem('${i.id}')">刪除</button>`:''}</span></div>
+    ${i.title?`<b>${esc(i.title)}</b>`:''}
+    ${i.kind==='text'?`<pre>${esc(i.content)}</pre>`:`<div>📎 ${esc(i.file_name)} <small>(${size(i.file_size)})</small></div><div class="pvbox"></div>`}
+  </div>`).join('')||'<p style="opacity:.6">這裡還是空的。</p>';
+  for(const i of list)if(i.kind==='file'&&/\.(png|jpe?g|gif|webp)$/i.test(i.file_name)){
+    const{data}=await sb.storage.from('shared-files').createSignedUrl(i.file_path,3600);
+    const box=document.querySelector(`#i-${i.id} .pvbox`);
+    if(data&&box)box.innerHTML=`<img class="pv" src="${data.signedUrl}" loading="lazy">`;
+  }
+}
+async function addText(){
+  const title=$('#ti').value.trim(),content=$('#ct').value.trim();
+  if(!content&&!title)return;
+  await sb.from('items').insert({kind:'text',title,content,author_name:myName()});
+  $('#ti').value=$('#ct').value='';loadItems();
+}
+async function addFiles(files){
+  for(const f of files){
+    $('#up').textContent='上傳中：'+f.name;
+    const ext=(f.name.split('.').pop()||'bin').replace(/[^a-z0-9]/gi,'').slice(0,8)||'bin';
+    const path=`${me.id}/${Date.now()}_${Math.random().toString(36).slice(2,7)}.${ext}`;
+    const{error}=await sb.storage.from('shared-files').upload(path,f,{contentType:f.type||undefined});
+    if(error){$('#up').textContent='上傳失敗：'+error.message;continue}
+    await sb.from('items').insert({kind:'file',title:$('#ti').value.trim(),file_path:path,file_name:f.name,file_size:f.size,author_name:myName()});
+  }
+  $('#ti').value='';$('#fi').value='';$('#up').textContent='';loadItems();
+}
+async function openFile(id){
+  const i=items.find(x=>x.id===id);
+  const{data}=await sb.storage.from('shared-files').createSignedUrl(i.file_path,300,{download:i.file_name});
+  if(data)location.href=data.signedUrl;
+}
+function copyText(id){
+  navigator.clipboard.writeText(items.find(x=>x.id===id).content||'').then(()=>alert('已複製'));
+}
+async function delItem(id){
+  if(!confirm('確定刪除？'))return;
+  const i=items.find(x=>x.id===id);
+  if(i.file_path)await sb.storage.from('shared-files').remove([i.file_path]);
+  await sb.from('items').delete().eq('id',id);loadItems();
+}
+init();
+</script>
+</body>
+</html>
