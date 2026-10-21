@@ -31,6 +31,11 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 .chip{display:inline-block;background:var(--input);border-radius:12px;padding:2px 10px;margin:4px 6px 4px 0;font-size:13px;cursor:pointer}
 .chip.on{background:var(--accent);color:var(--on-accent)}
 .pin{color:#f5c542!important}a{color:#9ec5ff}.bub.me a{color:#0b4a99}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center}
+.grid div{padding:6px 0;border-radius:10px;background:var(--card);cursor:pointer;font-size:14px;min-height:44px}
+.grid .h{background:none;cursor:default;opacity:.6;min-height:0;padding:2px}
+.grid .t{outline:2px solid var(--accent)}.grid .s{background:var(--accent);color:var(--on-accent)}
+.ev-dot{display:block;font-size:10px;color:#f5c542}.s .ev-dot{color:#b8860b}
 .hide{display:none}
 .msgs{min-height:40vh}
 </style>
@@ -51,12 +56,28 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
   <div class="tabs">
     <button id="t-msg" class="on" onclick="setTab('msg')">💬 留言<span id="dot"></span></button>
     <button id="t-db" onclick="setTab('db')">🗂 資料庫</button>
+    <button id="t-cal" onclick="setTab('cal')">📅 行事曆</button>
   </div>
 
   <div id="v-msg">
     <div id="msgs" class="msgs"></div>
     <div class="row"><input id="mb" placeholder="留言給對方…" onkeydown="if(event.key==='Enter')sendMsg()"><button onclick="$('#mf').click()" style="background:#4a4a4a;color:#fff">📎</button><button onclick="sendMsg()">送出</button></div>
     <input id="mf" type="file" class="hide" onchange="sendMsgFile(this.files[0])">
+  </div>
+
+  <div id="v-cal" class="hide">
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+      <button class="ghost" onclick="mon(-1)">‹ 上月</button><b id="ml"></b><button class="ghost" onclick="mon(1)">下月 ›</button>
+    </div>
+    <div id="grid" class="grid"></div>
+    <div class="card" style="margin-top:10px">
+      <b id="dl"></b>
+      <div id="dev"></div>
+      <input id="et" placeholder="新增行程標題">
+      <div class="row"><input id="etm" type="time"><input id="en" placeholder="備註（選填）"></div>
+      <button onclick="addEv()" style="margin-top:8px">新增行程</button>
+    </div>
+    <b>接下來的行程</b><div id="up2" style="margin-top:6px"></div>
   </div>
 
   <div id="v-db" class="hide">
@@ -94,11 +115,12 @@ async function init(){
   $('#app').classList.toggle('hide',!me);
   if(!me)return;
   $('#who').textContent=myName()+' ✎';
-  await Promise.all([loadReads(),loadMsgs(),loadItems()]);
+  await Promise.all([loadReads(),loadMsgs(),loadItems(),loadEvs()]);
   sb.channel('shared')
     .on('postgres_changes',{event:'*',schema:'public',table:'messages'},loadMsgs)
     .on('postgres_changes',{event:'*',schema:'public',table:'items'},loadItems)
     .on('postgres_changes',{event:'*',schema:'public',table:'reads'},loadReads)
+    .on('postgres_changes',{event:'*',schema:'public',table:'events'},loadEvs)
     .subscribe();
 }
 async function login(){
@@ -115,7 +137,7 @@ let reads=[],tag='',tab='msg',editId=null;
 const link=s=>esc(s).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
 const used=()=>[...items,...msgs].reduce((n,x)=>n+(x.file_size||0),0);
 function setTab(t){
-  tab=t;for(const k of['msg','db']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
+  tab=t;for(const k of['msg','db','cal']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
   if(t==='msg'){markRead();window.scrollTo(0,document.body.scrollHeight)}else badge();
 }
 async function markRead(){await sb.from('reads').upsert({user_id:me.id,last_read:new Date().toISOString()});loadReads()}
@@ -169,13 +191,13 @@ async function sendMsg(){
   if(window.Notification&&Notification.permission==='default')Notification.requestPermission();
   const b=$('#mb').value.trim();if(!b)return;
   $('#mb').value='';
-  await sb.from('messages').insert({body:b,author_name:myName()});loadMsgs();
+  const{error}=await sb.from('messages').insert({body:b,author_name:myName()});if(error)alert('留言失敗：'+error.message);loadMsgs();
 }
 async function sendMsgFile(f){
   if(!f)return;const u=await upload(f);$('#mf').value='';
   if(u.error)return alert('上傳失敗：'+u.error.message);
   const b=$('#mb').value.trim();$('#mb').value='';
-  await sb.from('messages').insert({body:b,author_name:myName(),...u});loadMsgs();
+  const{error}=await sb.from('messages').insert({body:b,author_name:myName(),...u});if(error)alert('留言失敗：'+error.message+'（請確認已執行 upgrade.sql）');loadMsgs();
 }
 async function delMsg(id){if(confirm('刪除這則留言？')){await sb.from('messages').delete().eq('id',id);loadMsgs()}}
 
@@ -224,8 +246,38 @@ async function openFile(id,src){
   const i=(src==='m'?msgs:items).find(x=>x.id===id),u=await signed(i.file_path,i.file_name);
   if(u)location.href=u;
 }
+const ymd=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+let evs=[],cur=new Date(),sel=ymd(new Date());
+async function loadEvs(){const{data}=await sb.from('events').select('*').order('event_date').order('event_time');evs=data||[];drawCal()}
+function mon(n){cur=new Date(cur.getFullYear(),cur.getMonth()+n,1);drawCal()}
+function pickDay(d){sel=d;cur=new Date(d+'T00:00');drawCal()}
+function evRow(e,showDate){
+  const diff=Math.round((new Date(e.event_date+'T00:00')-new Date(ymd(new Date())+'T00:00'))/864e5);
+  const cd=diff>0?`還有 ${diff} 天`:diff===0?'今天':'';
+  return `<div class="meta" style="font-size:14px;opacity:1;margin:6px 0"><span><b>${esc(e.title)}</b> ${showDate?e.event_date.slice(5).replace('-','/')+' ':''}${e.event_time?e.event_time.slice(0,5):''} <small style="opacity:.7">${cd}</small><br><small style="opacity:.7">${e.note?esc(e.note)+' · ':''}${esc(e.author_name)}</small></span>${e.author_id===me.id&&!showDate?`<button class="ghost" onclick="delEv('${e.id}')">刪除</button>`:''}</div>`;
+}
+function drawCal(){
+  const y=cur.getFullYear(),m=cur.getMonth(),first=new Date(y,m,1).getDay(),days=new Date(y,m+1,0).getDate(),today=ymd(new Date());
+  $('#ml').textContent=y+' 年 '+(m+1)+' 月';
+  let g=['日','一','二','三','四','五','六'].map(d=>`<div class="h">${d}</div>`).join('');
+  for(let i=0;i<first;i++)g+='<div class="h"></div>';
+  for(let d=1;d<=days;d++){
+    const k=y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0'),n=evs.filter(e=>e.event_date===k).length;
+    g+=`<div class="${k===sel?'s':''} ${k===today?'t':''}" onclick="pickDay('${k}')">${d}${n?`<span class="ev-dot">●${n>1?n:''}</span>`:''}</div>`;
+  }
+  $('#grid').innerHTML=g;
+  $('#dl').textContent=sel.replace(/-/g,'/')+' 的行程';
+  $('#dev').innerHTML=evs.filter(e=>e.event_date===sel).map(e=>evRow(e)).join('')||'<p style="opacity:.6;margin:6px 0">這天沒有行程</p>';
+  $('#up2').innerHTML=evs.filter(e=>e.event_date>=today).slice(0,8).map(e=>`<div class="card" onclick="pickDay('${e.event_date}')">${evRow(e,1)}</div>`).join('')||'<p style="opacity:.6">沒有即將到來的行程</p>';
+}
+async function addEv(){
+  const title=$('#et').value.trim();if(!title)return;
+  await sb.from('events').insert({title,event_date:sel,event_time:$('#etm').value||null,note:$('#en').value.trim()||null,author_name:myName()});
+  $('#et').value=$('#etm').value=$('#en').value='';loadEvs();
+}
+async function delEv(id){if(confirm('刪除這個行程？')){await sb.from('events').delete().eq('id',id);loadEvs()}}
 function exportAll(){
-  const b=new Blob([JSON.stringify({items,messages:msgs},null,1)],{type:'application/json'});
+  const b=new Blob([JSON.stringify({items,messages:msgs,events:evs},null,1)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='小倉庫備份_'+new Date().toISOString().slice(0,10)+'.json';a.click();
 }
 function copyText(id){
