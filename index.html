@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>小倉庫</title>
+<link rel="manifest" href="manifest.json"><link rel="apple-touch-icon" href="icon-192.png"><meta name="theme-color" content="#141414"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <style>
 :root{--bg:#141414;--card:#242424;--input:#2c2c2c;--text:#e6e6e6;--accent:#d9d9d9;--on-accent:#141414;--line:#3a3a3a;color-scheme:dark}
@@ -26,6 +27,10 @@ button.ghost{background:transparent;color:var(--accent);padding:4px 8px;font-siz
 pre{white-space:pre-wrap;margin:6px 0 0;font:inherit}
 img.pv{max-width:100%;border-radius:10px;margin-top:8px}
 input::placeholder,textarea::placeholder{color:#8a8a8a}
+.dot{background:#e5484d;color:#fff;border-radius:9px;padding:0 6px;font-size:12px;margin-left:4px}
+.chip{display:inline-block;background:var(--input);border-radius:12px;padding:2px 10px;margin:4px 6px 4px 0;font-size:13px;cursor:pointer}
+.chip.on{background:var(--accent);color:var(--on-accent)}
+.pin{color:#f5c542!important}a{color:#9ec5ff}.bub.me a{color:#0b4a99}
 .hide{display:none}
 .msgs{min-height:40vh}
 </style>
@@ -44,25 +49,29 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 <div id="app" class="hide">
   <h1>小倉庫 <span><button class="ghost" onclick="rename()" id="who"></button><button class="ghost" onclick="logout()">登出</button></span></h1>
   <div class="tabs">
-    <button id="t-msg" class="on" onclick="setTab('msg')">💬 留言</button>
+    <button id="t-msg" class="on" onclick="setTab('msg')">💬 留言<span id="dot"></span></button>
     <button id="t-db" onclick="setTab('db')">🗂 資料庫</button>
   </div>
 
   <div id="v-msg">
     <div id="msgs" class="msgs"></div>
-    <div class="row"><input id="mb" placeholder="留言給對方…" onkeydown="if(event.key==='Enter')sendMsg()"><button onclick="sendMsg()">送出</button></div>
+    <div class="row"><input id="mb" placeholder="留言給對方…" onkeydown="if(event.key==='Enter')sendMsg()"><button onclick="$('#mf').click()" style="background:#4a4a4a;color:#fff">📎</button><button onclick="sendMsg()">送出</button></div>
+    <input id="mf" type="file" class="hide" onchange="sendMsgFile(this.files[0])">
   </div>
 
   <div id="v-db" class="hide">
     <div class="card">
       <input id="ti" placeholder="標題（選填）">
+      <input id="tg" placeholder="標籤（用逗號分隔，選填）">
       <textarea id="ct" rows="3" placeholder="貼上一段文字…"></textarea>
-      <div class="row"><button onclick="addText()">存文字</button><button onclick="$('#fi').click()" style="background:#4a4a4a;color:#fff">📎 上傳檔案</button></div>
+      <div class="row"><button id="sv" onclick="addText()">存文字</button><button onclick="$('#fi').click()" style="background:#4a4a4a;color:#fff">📎 上傳檔案</button></div>
       <input id="fi" type="file" class="hide" multiple onchange="addFiles(this.files)">
       <div id="up" class="meta"></div>
     </div>
     <input id="q" placeholder="🔍 搜尋標題、內容、檔名" oninput="drawItems()">
+    <div id="chips"></div>
     <div id="items"></div>
+    <div class="meta" style="margin-top:8px"><span id="usage"></span><button class="ghost" onclick="exportAll()">匯出備份</button></div>
   </div>
 </div>
 
@@ -85,10 +94,11 @@ async function init(){
   $('#app').classList.toggle('hide',!me);
   if(!me)return;
   $('#who').textContent=myName()+' ✎';
-  await Promise.all([loadMsgs(),loadItems()]);
+  await Promise.all([loadReads(),loadMsgs(),loadItems()]);
   sb.channel('shared')
     .on('postgres_changes',{event:'*',schema:'public',table:'messages'},loadMsgs)
     .on('postgres_changes',{event:'*',schema:'public',table:'items'},loadItems)
+    .on('postgres_changes',{event:'*',schema:'public',table:'reads'},loadReads)
     .subscribe();
 }
 async function login(){
@@ -101,21 +111,71 @@ async function rename(){
   const{data}=await sb.auth.updateUser({data:{name:n.trim()}});
   me=data.user;$('#who').textContent=myName()+' ✎';
 }
+let reads=[],tag='',tab='msg',editId=null;
+const link=s=>esc(s).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
+const used=()=>[...items,...msgs].reduce((n,x)=>n+(x.file_size||0),0);
 function setTab(t){
-  for(const k of['msg','db']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
+  tab=t;for(const k of['msg','db']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
+  if(t==='msg'){markRead();window.scrollTo(0,document.body.scrollHeight)}else badge();
 }
-
+async function markRead(){await sb.from('reads').upsert({user_id:me.id,last_read:new Date().toISOString()});loadReads()}
+async function loadReads(){const{data}=await sb.from('reads').select('*');reads=data||[];drawMsgs()}
+function badge(){
+  const mine=new Date(reads.find(r=>r.user_id===me.id)?.last_read||0);
+  const n=tab==='msg'?0:msgs.filter(m=>m.author_id!==me.id&&new Date(m.created_at)>mine).length;
+  $('#dot').innerHTML=n?`<span class="dot">${n}</span>`:'';
+  document.title=(n?`(${n}) `:'')+'小倉庫';
+}
+async function compress(f){
+  if(!/^image\/(jpe?g|png|webp)$/.test(f.type)||f.size<300000)return f;
+  try{
+    const bmp=await createImageBitmap(f),s=Math.min(1,1600/Math.max(bmp.width,bmp.height));
+    const c=document.createElement('canvas');c.width=bmp.width*s;c.height=bmp.height*s;
+    c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+    const b=await new Promise(r=>c.toBlob(r,'image/jpeg',.8));
+    return b&&b.size<f.size?new File([b],f.name.replace(/\.\w+$/,'')+'.jpg',{type:'image/jpeg'}):f;
+  }catch(e){return f}
+}
+async function upload(f){
+  f=await compress(f);
+  const ext=(f.name.split('.').pop()||'bin').replace(/[^a-z0-9]/gi,'').slice(0,8)||'bin';
+  const path=`${me.id}/${Date.now()}_${Math.random().toString(36).slice(2,7)}.${ext}`;
+  const{error}=await sb.storage.from('shared-files').upload(path,f,{contentType:f.type||undefined});
+  return error?{error}:{file_path:path,file_name:f.name,file_size:f.size};
+}
+async function signed(p,dl){const{data}=await sb.storage.from('shared-files').createSignedUrl(p,3600,dl?{download:dl}:undefined);return data?.signedUrl}
+async function previews(list,pre){
+  for(const i of list)if(i.file_path&&/\.(png|jpe?g|gif|webp)$/i.test(i.file_name)){
+    const u=await signed(i.file_path),b=document.querySelector(`#${pre}-${i.id} .pvbox`);
+    if(u&&b)b.innerHTML=`<img class="pv" src="${u}" loading="lazy">`;
+  }
+}
 async function loadMsgs(){
+  const prev=msgs.length;
   const{data}=await sb.from('messages').select('*').order('created_at');
   msgs=data||[];
-  $('#msgs').innerHTML=msgs.map(m=>`<div class="bub ${m.author_id===me.id?'me':''}"><small>${esc(m.author_name)} · ${fmt(m.created_at)}${m.author_id===me.id?` · <a href="#" style="color:inherit" onclick="delMsg('${m.id}');return false">刪除</a>`:''}</small>${esc(m.body)}</div>`).join('')||'<p style="opacity:.6">還沒有留言，說點什麼吧～</p>';
-  window.scrollTo(0,document.body.scrollHeight);
+  const m=msgs[msgs.length-1];
+  if(prev&&msgs.length>prev&&m.author_id!==me.id&&document.hidden&&window.Notification&&Notification.permission==='granted')new Notification(m.author_name,{body:m.body||'傳了一個檔案'});
+  drawMsgs();if(tab==='msg')markRead();
+}
+function drawMsgs(){
+  const other=reads.find(r=>r.user_id!==me.id)?.last_read;
+  $('#msgs').innerHTML=msgs.map(m=>{const mine=m.author_id===me.id;
+    return `<div class="bub ${mine?'me':''}" id="m-${m.id}"><small>${esc(m.author_name)} · ${fmt(m.created_at)}${mine&&other&&new Date(other)>=new Date(m.created_at)?' · 已讀':''}${mine?` · <a href="#" style="color:inherit" onclick="delMsg('${m.id}');return false">刪除</a>`:''}</small>${link(m.body)}${m.file_path?`<div>📎 <a href="#" onclick="openFile('${m.id}','m');return false">${esc(m.file_name)}</a></div><div class="pvbox"></div>`:''}</div>`}).join('')||'<p style="opacity:.6">還沒有留言，說點什麼吧～</p>';
+  previews(msgs,'m');badge();
+  if(tab==='msg')window.scrollTo(0,document.body.scrollHeight);
 }
 async function sendMsg(){
+  if(window.Notification&&Notification.permission==='default')Notification.requestPermission();
   const b=$('#mb').value.trim();if(!b)return;
   $('#mb').value='';
-  await sb.from('messages').insert({body:b,author_name:myName()});
-  loadMsgs();
+  await sb.from('messages').insert({body:b,author_name:myName()});loadMsgs();
+}
+async function sendMsgFile(f){
+  if(!f)return;const u=await upload(f);$('#mf').value='';
+  if(u.error)return alert('上傳失敗：'+u.error.message);
+  const b=$('#mb').value.trim();$('#mb').value='';
+  await sb.from('messages').insert({body:b,author_name:myName(),...u});loadMsgs();
 }
 async function delMsg(id){if(confirm('刪除這則留言？')){await sb.from('messages').delete().eq('id',id);loadMsgs()}}
 
@@ -123,42 +183,50 @@ async function loadItems(){
   const{data}=await sb.from('items').select('*').order('created_at',{ascending:false});
   items=data||[];drawItems();
 }
+const parseTags=()=>$('#tg').value.split(/[,，\s]+/).map(t=>t.replace(/['"<>\\]/g,'').trim()).filter(Boolean);
+function pickTag(t){tag=tag===t?'':t;drawItems()}
 async function drawItems(){
   const q=$('#q').value.trim().toLowerCase();
-  const list=items.filter(i=>!q||[i.title,i.content,i.file_name].some(s=>(s||'').toLowerCase().includes(q)));
+  $('#chips').innerHTML=[...new Set(items.flatMap(i=>i.tags||[]))].map(t=>`<span class="chip ${t===tag?'on':''}" data-t="${esc(t)}" onclick="pickTag(this.dataset.t)">#${esc(t)}</span>`).join('');
+  const list=items.filter(i=>(!tag||(i.tags||[]).includes(tag))&&(!q||[i.title,i.content,i.file_name,...(i.tags||[])].some(s=>(s||'').toLowerCase().includes(q)))).sort((a,b)=>b.pinned-a.pinned);
   $('#items').innerHTML=list.map(i=>`<div class="card" id="i-${i.id}">
     <div class="meta"><span>${esc(i.author_name)} · ${fmt(i.created_at)}</span>
-    <span>${i.kind==='text'?`<button class="ghost" onclick="copyText('${i.id}')">複製</button>`:`<button class="ghost" onclick="openFile('${i.id}')">開啟</button>`}${i.author_id===me.id?`<button class="ghost" onclick="delItem('${i.id}')">刪除</button>`:''}</span></div>
+    <span><button class="ghost ${i.pinned?'pin':''}" onclick="pin('${i.id}')">${i.pinned?'★':'☆'}</button>${i.kind==='text'?`<button class="ghost" onclick="copyText('${i.id}')">複製</button><button class="ghost" onclick="editItem('${i.id}')">編輯</button>`:`<button class="ghost" onclick="openFile('${i.id}')">開啟</button>`}${i.author_id===me.id?`<button class="ghost" onclick="delItem('${i.id}')">刪除</button>`:''}</span></div>
     ${i.title?`<b>${esc(i.title)}</b>`:''}
-    ${i.kind==='text'?`<pre>${esc(i.content)}</pre>`:`<div>📎 ${esc(i.file_name)} <small>(${size(i.file_size)})</small></div><div class="pvbox"></div>`}
+    ${i.kind==='text'?`<pre>${link(i.content)}</pre>`:`<div>📎 ${esc(i.file_name)} <small>(${size(i.file_size)})</small></div><div class="pvbox"></div>`}
+    <div>${(i.tags||[]).map(t=>`<span class="chip" data-t="${esc(t)}" onclick="pickTag(this.dataset.t)">#${esc(t)}</span>`).join('')}</div>
   </div>`).join('')||'<p style="opacity:.6">這裡還是空的。</p>';
-  for(const i of list)if(i.kind==='file'&&/\.(png|jpe?g|gif|webp)$/i.test(i.file_name)){
-    const{data}=await sb.storage.from('shared-files').createSignedUrl(i.file_path,3600);
-    const box=document.querySelector(`#i-${i.id} .pvbox`);
-    if(data&&box)box.innerHTML=`<img class="pv" src="${data.signedUrl}" loading="lazy">`;
-  }
+  $('#usage').textContent='已用 '+size(used())+' / 約 1 GB';
+  previews(list,'i');
+}
+async function pin(id){const i=items.find(x=>x.id===id);await sb.from('items').update({pinned:!i.pinned}).eq('id',id);loadItems()}
+function editItem(id){
+  const i=items.find(x=>x.id===id);editId=id;
+  $('#ti').value=i.title||'';$('#ct').value=i.content||'';$('#tg').value=(i.tags||[]).join(',');$('#sv').textContent='更新';window.scrollTo(0,0);
 }
 async function addText(){
-  const title=$('#ti').value.trim(),content=$('#ct').value.trim();
+  const title=$('#ti').value.trim(),content=$('#ct').value.trim(),tags=parseTags();
   if(!content&&!title)return;
-  await sb.from('items').insert({kind:'text',title,content,author_name:myName()});
-  $('#ti').value=$('#ct').value='';loadItems();
+  if(editId){await sb.from('items').update({title,content,tags}).eq('id',editId);editId=null;$('#sv').textContent='存文字'}
+  else await sb.from('items').insert({kind:'text',title,content,tags,author_name:myName()});
+  $('#ti').value=$('#ct').value=$('#tg').value='';loadItems();
 }
 async function addFiles(files){
   for(const f of files){
     $('#up').textContent='上傳中：'+f.name;
-    const ext=(f.name.split('.').pop()||'bin').replace(/[^a-z0-9]/gi,'').slice(0,8)||'bin';
-    const path=`${me.id}/${Date.now()}_${Math.random().toString(36).slice(2,7)}.${ext}`;
-    const{error}=await sb.storage.from('shared-files').upload(path,f,{contentType:f.type||undefined});
-    if(error){$('#up').textContent='上傳失敗：'+error.message;continue}
-    await sb.from('items').insert({kind:'file',title:$('#ti').value.trim(),file_path:path,file_name:f.name,file_size:f.size,author_name:myName()});
+    const u=await upload(f);
+    if(u.error){$('#up').textContent='上傳失敗：'+u.error.message;continue}
+    await sb.from('items').insert({kind:'file',title:$('#ti').value.trim(),tags:parseTags(),author_name:myName(),...u});
   }
-  $('#ti').value='';$('#fi').value='';$('#up').textContent='';loadItems();
+  $('#ti').value=$('#tg').value=$('#fi').value='';$('#up').textContent='';loadItems();
 }
-async function openFile(id){
-  const i=items.find(x=>x.id===id);
-  const{data}=await sb.storage.from('shared-files').createSignedUrl(i.file_path,300,{download:i.file_name});
-  if(data)location.href=data.signedUrl;
+async function openFile(id,src){
+  const i=(src==='m'?msgs:items).find(x=>x.id===id),u=await signed(i.file_path,i.file_name);
+  if(u)location.href=u;
+}
+function exportAll(){
+  const b=new Blob([JSON.stringify({items,messages:msgs},null,1)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='小倉庫備份_'+new Date().toISOString().slice(0,10)+'.json';a.click();
 }
 function copyText(id){
   navigator.clipboard.writeText(items.find(x=>x.id===id).content||'').then(()=>alert('已複製'));
@@ -170,6 +238,7 @@ async function delItem(id){
   await sb.from('items').delete().eq('id',id);loadItems();
 }
 init();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
 </script>
 </body>
 </html>
