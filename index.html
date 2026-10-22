@@ -303,21 +303,45 @@ function cancelEdit(){
 }
 async function delEv(id){if(confirm('刪除這個行程？')){await sb.from('events').delete().eq('id',id);loadEvs()}}
 let shop=[],shopEditId=null;
-async function loadShop(){const{data}=await sb.from('shopping').select('*').order('created_at');shop=data||[];drawShop()}
+async function loadShop(){const{data}=await sb.from('shopping').select('*').order('created_at');shop=data||[];shop.forEach((s,i)=>{if(s.sort_order==null)s.sort_order=i+1});drawShop()}
 function shopRow(s){
-  return `<div class="card" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;${s.done?'opacity:.55':''}"><input type="checkbox" ${s.done?'checked':''} style="width:22px;height:22px;margin:0;padding:0;flex:none" onchange="toggleShop('${s.id}',this.checked)"><div style="flex:1;${s.done?'text-decoration:line-through':''}">${esc(s.name)}${s.qty?` <small>× ${esc(s.qty)}</small>`:''}<br><small style="opacity:.6">${s.done?esc(s.done_by)+' 已買':esc(s.author_name)+' 加入'}</small></div><button class="ghost" onclick="editShop('${s.id}')">編輯</button><button class="ghost" onclick="delShop('${s.id}')">✕</button></div>`;
+  return `<div class="card srow ${s.done?'sdone':''}" data-sid="${s.id}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;${s.done?'opacity:.55':''}">${s.done?'':`<span style="cursor:grab;touch-action:none;user-select:none;padding:4px 2px;font-size:20px;opacity:.6;flex:none" onpointerdown="dragStart(event)" onpointermove="dragMove(event)" onpointerup="dragEnd(event)" onpointercancel="dragEnd(event)">☰</span>`}<input type="checkbox" ${s.done?'checked':''} style="width:22px;height:22px;margin:0;padding:0;flex:none" onchange="toggleShop('${s.id}',this.checked)"><div style="flex:1;${s.done?'text-decoration:line-through':''}">${esc(s.name)}${s.qty?` <small>× ${esc(s.qty)}</small>`:''}<br><small style="opacity:.6">${s.done?esc(s.done_by)+' 已買':esc(s.author_name)+' 加入'}</small></div><button class="ghost" onclick="editShop('${s.id}')">編輯</button><button class="ghost" onclick="delShop('${s.id}')">✕</button></div>`;
 }
 function drawShop(){
-  const t=shop.filter(s=>!s.done),d=shop.filter(s=>s.done);
-  $('#slist').innerHTML=(t.map(shopRow).join('')||'<p style="opacity:.6">清單是空的</p>')+(d.length?`<p style="opacity:.6;margin:12px 0 6px">已購買（${d.length}）</p>`+d.map(shopRow).join(''):'');
+  const t=shop.filter(s=>!s.done).sort((a,b)=>a.sort_order-b.sort_order),d=shop.filter(s=>s.done);
+  $('#slist').innerHTML=('<div id="stodo">'+(t.map(shopRow).join('')||'<p style="opacity:.6">清單是空的</p>')+'</div>')+(d.length?`<p style="opacity:.6;margin:12px 0 6px">已購買（${d.length}）</p>`+d.map(shopRow).join(''):'');
   $('#scnt').textContent='待買 '+t.length+' 項';
 }
 async function addShop(){
   const name=$('#sn').value.trim();if(!name)return;
   const row={name,qty:$('#sq').value.trim()||null};
-  const{error}=shopEditId?await sb.from('shopping').update(row).eq('id',shopEditId):await sb.from('shopping').insert({...row,author_name:myName()});
-  if(error)return alert('儲存失敗：'+error.message+'（請確認已執行 shopping.sql）');
+  const{error}=shopEditId?await sb.from('shopping').update(row).eq('id',shopEditId):await sb.from('shopping').insert({...row,sort_order:Math.max(0,...shop.map(s=>s.sort_order||0))+1,author_name:myName()});
+  if(error)return alert('儲存失敗：'+error.message+'（請確認已執行 shopping.sql 與 shopping_order.sql）');
   cancelShop();loadShop();
+}
+let drag=null;
+function dragStart(e){
+  e.preventDefault();drag=e.target.closest('.srow');
+  drag.style.opacity='.6';drag.style.background='#3a3a3a';e.target.setPointerCapture(e.pointerId);
+}
+function dragMove(e){
+  if(!drag)return;
+  const over=document.elementFromPoint(e.clientX,e.clientY)?.closest('.srow');
+  if(!over||over===drag||over.parentNode!==drag.parentNode)return;
+  const r=over.getBoundingClientRect();
+  over.parentNode.insertBefore(drag,e.clientY<r.top+r.height/2?over:over.nextSibling);
+}
+async function dragEnd(){
+  if(!drag)return;
+  drag.style.opacity='';drag.style.background='';drag=null;
+  const ups=[];
+  [...document.querySelectorAll('#stodo .srow')].forEach((el,i)=>{
+    const s=shop.find(x=>x.id===el.dataset.sid);
+    if(s&&s.sort_order!==i+1){s.sort_order=i+1;ups.push(sb.from('shopping').update({sort_order:i+1}).eq('id',s.id))}
+  });
+  const rs=await Promise.all(ups);
+  if(rs.some(r=>r.error))alert('排序失敗：請確認已執行 shopping_order.sql');
+  loadShop();
 }
 function editShop(id){
   const s=shop.find(x=>x.id===id);shopEditId=id;
