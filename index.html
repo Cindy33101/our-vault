@@ -40,6 +40,7 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 .grid .t{outline:2px solid var(--accent)}.grid .s{background:var(--accent);color:var(--on-accent)}
 .ev-dot{display:block;font-size:10px;color:#f5c542}.s .ev-dot{color:#b8860b}
 #v-msg .row{align-items:flex-end}.row textarea{margin:0;resize:none}
+.tabs{gap:6px}.tabs button{padding:10px 2px;font-size:15px}
 .hide{display:none}
 .msgs{min-height:40vh}
 </style>
@@ -61,12 +62,19 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
     <button id="t-msg" class="on" onclick="setTab('msg')">💬 留言<span id="dot"></span></button>
     <button id="t-db" onclick="setTab('db')">🗂 資料庫</button>
     <button id="t-cal" onclick="setTab('cal')">📅 行事曆</button>
+    <button id="t-shop" onclick="setTab('shop')">🛒 採購</button>
   </div>
 
   <div id="v-msg">
     <div id="msgs" class="msgs"></div>
     <div class="row"><textarea id="mb" rows="1" placeholder="留言給對方…" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!matchMedia('(pointer:coarse)').matches){event.preventDefault();sendMsg()}"></textarea><button onclick="$('#mf').click()" style="background:#4a4a4a;color:#fff">📎</button><button onclick="sendMsg()">送出</button></div>
     <input id="mf" type="file" class="hide" onchange="sendMsgFile(this.files[0])">
+  </div>
+
+  <div id="v-shop" class="hide">
+    <div class="row"><input id="sn" placeholder="要買什麼？" onkeydown="if(event.key==='Enter')addShop()"><input id="sq" placeholder="數量" style="width:30%;flex:none"><button onclick="addShop()">加入</button></div>
+    <div id="slist" style="margin-top:10px"></div>
+    <div class="meta" style="margin-top:8px"><span id="scnt"></span><button class="ghost" onclick="clearDone()">清除已購買</button></div>
   </div>
 
   <div id="v-cal" class="hide">
@@ -119,12 +127,13 @@ async function init(){
   $('#app').classList.toggle('hide',!me);
   if(!me)return;
   $('#who').textContent=myName()+' ✎';
-  await Promise.all([loadReads(),loadMsgs(),loadItems(),loadEvs()]);
+  await Promise.all([loadReads(),loadMsgs(),loadItems(),loadEvs(),loadShop()]);
   sb.channel('shared')
     .on('postgres_changes',{event:'*',schema:'public',table:'messages'},loadMsgs)
     .on('postgres_changes',{event:'*',schema:'public',table:'items'},loadItems)
     .on('postgres_changes',{event:'*',schema:'public',table:'reads'},loadReads)
     .on('postgres_changes',{event:'*',schema:'public',table:'events'},loadEvs)
+    .on('postgres_changes',{event:'*',schema:'public',table:'shopping'},loadShop)
     .subscribe();
 }
 async function login(){
@@ -141,7 +150,7 @@ let reads=[],tag='',tab='msg',editId=null;
 const link=s=>esc(s).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
 const used=()=>[...items,...msgs].reduce((n,x)=>n+(x.file_size||0),0);
 function setTab(t){
-  tab=t;for(const k of['msg','db','cal']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
+  tab=t;for(const k of['msg','db','cal','shop']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
   if(t==='msg'){markRead();window.scrollTo(0,document.body.scrollHeight)}else badge();
 }
 async function markRead(){await sb.from('reads').upsert({user_id:me.id,last_read:new Date().toISOString()});loadReads()}
@@ -280,8 +289,27 @@ async function addEv(){
   $('#et').value=$('#etm').value=$('#en').value='';loadEvs();
 }
 async function delEv(id){if(confirm('刪除這個行程？')){await sb.from('events').delete().eq('id',id);loadEvs()}}
+let shop=[];
+async function loadShop(){const{data}=await sb.from('shopping').select('*').order('created_at');shop=data||[];drawShop()}
+function shopRow(s){
+  return `<div class="card" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;${s.done?'opacity:.55':''}"><input type="checkbox" ${s.done?'checked':''} style="width:22px;height:22px;margin:0;padding:0;flex:none" onchange="toggleShop('${s.id}',this.checked)"><div style="flex:1;${s.done?'text-decoration:line-through':''}">${esc(s.name)}${s.qty?` <small>× ${esc(s.qty)}</small>`:''}<br><small style="opacity:.6">${s.done?esc(s.done_by)+' 已買':esc(s.author_name)+' 加入'}</small></div><button class="ghost" onclick="delShop('${s.id}')">✕</button></div>`;
+}
+function drawShop(){
+  const t=shop.filter(s=>!s.done),d=shop.filter(s=>s.done);
+  $('#slist').innerHTML=(t.map(shopRow).join('')||'<p style="opacity:.6">清單是空的</p>')+(d.length?`<p style="opacity:.6;margin:12px 0 6px">已購買（${d.length}）</p>`+d.map(shopRow).join(''):'');
+  $('#scnt').textContent='待買 '+t.length+' 項';
+}
+async function addShop(){
+  const name=$('#sn').value.trim();if(!name)return;
+  const{error}=await sb.from('shopping').insert({name,qty:$('#sq').value.trim()||null,author_name:myName()});
+  if(error)return alert('新增失敗：'+error.message+'（請確認已執行 shopping.sql）');
+  $('#sn').value=$('#sq').value='';loadShop();
+}
+async function toggleShop(id,v){await sb.from('shopping').update({done:v,done_by:v?myName():null,done_at:v?new Date().toISOString():null}).eq('id',id);loadShop()}
+async function delShop(id){await sb.from('shopping').delete().eq('id',id);loadShop()}
+async function clearDone(){if(shop.some(s=>s.done)&&confirm('清除所有已購買的項目？')){await sb.from('shopping').delete().eq('done',true);loadShop()}}
 function exportAll(){
-  const b=new Blob([JSON.stringify({items,messages:msgs,events:evs},null,1)],{type:'application/json'});
+  const b=new Blob([JSON.stringify({items,messages:msgs,events:evs,shopping:shop},null,1)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='小倉庫備份_'+new Date().toISOString().slice(0,10)+'.json';a.click();
 }
 function copyText(id){
