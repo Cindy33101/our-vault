@@ -4,12 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>小倉庫</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=LXGW+WenKai+TC:wght@400;700&display=swap" rel="stylesheet">
 <link rel="manifest" href="manifest.json"><link rel="apple-touch-icon" href="icon-192.png"><meta name="theme-color" content="#141414"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <style>
+@font-face{font-family:"ChenYuLuoYan";src:url("chenyuluoyan.ttf") format("truetype");font-display:swap}
 :root{--bg:#141414;--card:#242424;--input:#2c2c2c;--text:#e6e6e6;--accent:#d9d9d9;--on-accent:#141414;--line:#3a3a3a;color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,"Noto Sans TC",sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+body{margin:0;background:var(--bg);color:var(--text);font:17px/1.6 "ChenYuLuoYan","LXGW WenKai TC",system-ui,"Noto Sans TC",sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
 .wrap{max-width:640px;margin:0 auto;padding:14px}
 h1{font-size:20px;margin:6px 0 12px;display:flex;justify-content:space-between;align-items:center}
 input,textarea{width:100%;border:1px solid var(--line);border-radius:10px;background:var(--input);color:var(--text);padding:10px;font:inherit;margin-bottom:8px}
@@ -36,6 +39,7 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 .grid .h{background:none;cursor:default;opacity:.6;min-height:0;padding:2px}
 .grid .t{outline:2px solid var(--accent)}.grid .s{background:var(--accent);color:var(--on-accent)}
 .ev-dot{display:block;font-size:10px;color:#f5c542}.s .ev-dot{color:#b8860b}
+#v-msg .row{align-items:flex-end}.row textarea{margin:0;resize:none}
 .hide{display:none}
 .msgs{min-height:40vh}
 </style>
@@ -61,7 +65,7 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 
   <div id="v-msg">
     <div id="msgs" class="msgs"></div>
-    <div class="row"><input id="mb" placeholder="留言給對方…" onkeydown="if(event.key==='Enter')sendMsg()"><button onclick="$('#mf').click()" style="background:#4a4a4a;color:#fff">📎</button><button onclick="sendMsg()">送出</button></div>
+    <div class="row"><textarea id="mb" rows="1" placeholder="留言給對方…" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!matchMedia('(pointer:coarse)').matches){event.preventDefault();sendMsg()}"></textarea><button onclick="$('#mf').click()" style="background:#4a4a4a;color:#fff">📎</button><button onclick="sendMsg()">送出</button></div>
     <input id="mf" type="file" class="hide" onchange="sendMsgFile(this.files[0])">
   </div>
 
@@ -190,13 +194,13 @@ function drawMsgs(){
 async function sendMsg(){
   if(window.Notification&&Notification.permission==='default')Notification.requestPermission();
   const b=$('#mb').value.trim();if(!b)return;
-  $('#mb').value='';
+  $('#mb').value='';$('#mb').style.height='auto';
   const{error}=await sb.from('messages').insert({body:b,author_name:myName()});if(error)alert('留言失敗：'+error.message);loadMsgs();
 }
 async function sendMsgFile(f){
   if(!f)return;const u=await upload(f);$('#mf').value='';
   if(u.error)return alert('上傳失敗：'+u.error.message);
-  const b=$('#mb').value.trim();$('#mb').value='';
+  const b=$('#mb').value.trim();$('#mb').value='';$('#mb').style.height='auto';
   const{error}=await sb.from('messages').insert({body:b,author_name:myName(),...u});if(error)alert('留言失敗：'+error.message+'（請確認已執行 upgrade.sql）');loadMsgs();
 }
 async function delMsg(id){if(confirm('刪除這則留言？')){await sb.from('messages').delete().eq('id',id);loadMsgs()}}
