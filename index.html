@@ -85,9 +85,10 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
     <div class="card" style="margin-top:10px">
       <b id="dl"></b>
       <div id="dev"></div>
-      <input id="et" placeholder="新增行程標題">
+      <input id="et" placeholder="行程標題">
+      <input id="ed" type="date">
       <div class="row"><input id="etm" type="time"><input id="en" placeholder="備註（選填）"></div>
-      <button onclick="addEv()" style="margin-top:8px">新增行程</button>
+      <div class="row" style="margin-top:8px"><button id="ab" onclick="addEv()">新增行程</button><button id="cb" class="hide" onclick="cancelEdit()" style="background:#4a4a4a;color:#fff">取消編輯</button></div>
     </div>
     <b>接下來的行程</b><div id="up2" style="margin-top:6px"></div>
   </div>
@@ -260,14 +261,14 @@ async function openFile(id,src){
   if(u)location.href=u;
 }
 const ymd=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-let evs=[],cur=new Date(),sel=ymd(new Date());
+let evs=[],cur=new Date(),sel=ymd(new Date()),evEditId=null;
 async function loadEvs(){const{data}=await sb.from('events').select('*').order('event_date').order('event_time');evs=data||[];drawCal()}
 function mon(n){cur=new Date(cur.getFullYear(),cur.getMonth()+n,1);drawCal()}
 function pickDay(d){sel=d;cur=new Date(d+'T00:00');drawCal()}
 function evRow(e,showDate){
   const diff=Math.round((new Date(e.event_date+'T00:00')-new Date(ymd(new Date())+'T00:00'))/864e5);
   const cd=diff>0?`還有 ${diff} 天`:diff===0?'今天':'';
-  return `<div class="meta" style="font-size:14px;opacity:1;margin:6px 0"><span><b>${esc(e.title)}</b> ${showDate?e.event_date.slice(5).replace('-','/')+' ':''}${e.event_time?e.event_time.slice(0,5):''} <small style="opacity:.7">${cd}</small><br><small style="opacity:.7">${e.note?esc(e.note)+' · ':''}${esc(e.author_name)}</small></span>${e.author_id===me.id&&!showDate?`<button class="ghost" onclick="delEv('${e.id}')">刪除</button>`:''}</div>`;
+  return `<div class="meta" style="font-size:14px;opacity:1;margin:6px 0"><span><b>${esc(e.title)}</b> ${showDate?e.event_date.slice(5).replace('-','/')+' ':''}${e.event_time?e.event_time.slice(0,5):''} <small style="opacity:.7">${cd}</small><br><small style="opacity:.7">${e.note?esc(e.note)+' · ':''}${esc(e.author_name)}</small></span>${showDate?'':`<span><button class="ghost" onclick="editEvent('${e.id}')">編輯</button>${e.author_id===me.id?`<button class="ghost" onclick="delEv('${e.id}')">刪除</button>`:''}</span>`}</div>`;
 }
 function drawCal(){
   const y=cur.getFullYear(),m=cur.getMonth(),first=new Date(y,m,1).getDay(),days=new Date(y,m+1,0).getDate(),today=ymd(new Date());
@@ -280,13 +281,25 @@ function drawCal(){
   }
   $('#grid').innerHTML=g;
   $('#dl').textContent=sel.replace(/-/g,'/')+' 的行程';
+  if(!evEditId)$('#ed').value=sel;
   $('#dev').innerHTML=evs.filter(e=>e.event_date===sel).map(e=>evRow(e)).join('')||'<p style="opacity:.6;margin:6px 0">這天沒有行程</p>';
   $('#up2').innerHTML=evs.filter(e=>e.event_date>=today).slice(0,8).map(e=>`<div class="card" onclick="pickDay('${e.event_date}')">${evRow(e,1)}</div>`).join('')||'<p style="opacity:.6">沒有即將到來的行程</p>';
 }
 async function addEv(){
   const title=$('#et').value.trim();if(!title)return;
-  await sb.from('events').insert({title,event_date:sel,event_time:$('#etm').value||null,note:$('#en').value.trim()||null,author_name:myName()});
-  $('#et').value=$('#etm').value=$('#en').value='';loadEvs();
+  const row={title,event_date:$('#ed').value||sel,event_time:$('#etm').value||null,note:$('#en').value.trim()||null};
+  const{error}=evEditId?await sb.from('events').update(row).eq('id',evEditId):await sb.from('events').insert({...row,author_name:myName()});
+  if(error)return alert('儲存失敗：'+error.message+(evEditId?'（請確認已執行 calendar_edit.sql）':''));
+  cancelEdit();pickDay(row.event_date);loadEvs();
+}
+function editEvent(id){
+  const e=evs.find(x=>x.id===id);evEditId=id;
+  $('#et').value=e.title;$('#ed').value=e.event_date;$('#etm').value=(e.event_time||'').slice(0,5);$('#en').value=e.note||'';
+  $('#ab').textContent='更新行程';$('#cb').classList.remove('hide');$('#et').focus();
+}
+function cancelEdit(){
+  evEditId=null;$('#et').value=$('#etm').value=$('#en').value='';
+  $('#ab').textContent='新增行程';$('#cb').classList.add('hide');$('#ed').value=sel;
 }
 async function delEv(id){if(confirm('刪除這個行程？')){await sb.from('events').delete().eq('id',id);loadEvs()}}
 let shop=[];
