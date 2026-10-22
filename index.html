@@ -72,7 +72,7 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
   </div>
 
   <div id="v-shop" class="hide">
-    <div class="row"><input id="sn" placeholder="要買什麼？" onkeydown="if(event.key==='Enter')addShop()"><input id="sq" placeholder="數量" style="width:30%;flex:none"><button onclick="addShop()">加入</button></div>
+    <div class="row"><input id="sn" placeholder="要買什麼？" onkeydown="if(event.key==='Enter')addShop()"><input id="sq" placeholder="數量" style="width:30%;flex:none"><button id="sb" onclick="addShop()">加入</button><button id="sc" class="hide" onclick="cancelShop()" style="background:#4a4a4a;color:#fff">取消</button></div>
     <div id="slist" style="margin-top:10px"></div>
     <div class="meta" style="margin-top:8px"><span id="scnt"></span><button class="ghost" onclick="clearDone()">清除已購買</button></div>
   </div>
@@ -302,10 +302,10 @@ function cancelEdit(){
   $('#ab').textContent='新增行程';$('#cb').classList.add('hide');$('#ed').value=sel;
 }
 async function delEv(id){if(confirm('刪除這個行程？')){await sb.from('events').delete().eq('id',id);loadEvs()}}
-let shop=[];
+let shop=[],shopEditId=null;
 async function loadShop(){const{data}=await sb.from('shopping').select('*').order('created_at');shop=data||[];drawShop()}
 function shopRow(s){
-  return `<div class="card" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;${s.done?'opacity:.55':''}"><input type="checkbox" ${s.done?'checked':''} style="width:22px;height:22px;margin:0;padding:0;flex:none" onchange="toggleShop('${s.id}',this.checked)"><div style="flex:1;${s.done?'text-decoration:line-through':''}">${esc(s.name)}${s.qty?` <small>× ${esc(s.qty)}</small>`:''}<br><small style="opacity:.6">${s.done?esc(s.done_by)+' 已買':esc(s.author_name)+' 加入'}</small></div><button class="ghost" onclick="delShop('${s.id}')">✕</button></div>`;
+  return `<div class="card" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;${s.done?'opacity:.55':''}"><input type="checkbox" ${s.done?'checked':''} style="width:22px;height:22px;margin:0;padding:0;flex:none" onchange="toggleShop('${s.id}',this.checked)"><div style="flex:1;${s.done?'text-decoration:line-through':''}">${esc(s.name)}${s.qty?` <small>× ${esc(s.qty)}</small>`:''}<br><small style="opacity:.6">${s.done?esc(s.done_by)+' 已買':esc(s.author_name)+' 加入'}</small></div><button class="ghost" onclick="editShop('${s.id}')">編輯</button><button class="ghost" onclick="delShop('${s.id}')">✕</button></div>`;
 }
 function drawShop(){
   const t=shop.filter(s=>!s.done),d=shop.filter(s=>s.done);
@@ -314,10 +314,16 @@ function drawShop(){
 }
 async function addShop(){
   const name=$('#sn').value.trim();if(!name)return;
-  const{error}=await sb.from('shopping').insert({name,qty:$('#sq').value.trim()||null,author_name:myName()});
-  if(error)return alert('新增失敗：'+error.message+'（請確認已執行 shopping.sql）');
-  $('#sn').value=$('#sq').value='';loadShop();
+  const row={name,qty:$('#sq').value.trim()||null};
+  const{error}=shopEditId?await sb.from('shopping').update(row).eq('id',shopEditId):await sb.from('shopping').insert({...row,author_name:myName()});
+  if(error)return alert('儲存失敗：'+error.message+'（請確認已執行 shopping.sql）');
+  cancelShop();loadShop();
 }
+function editShop(id){
+  const s=shop.find(x=>x.id===id);shopEditId=id;
+  $('#sn').value=s.name;$('#sq').value=s.qty||'';$('#sb').textContent='更新';$('#sc').classList.remove('hide');$('#sn').focus();window.scrollTo(0,0);
+}
+function cancelShop(){shopEditId=null;$('#sn').value=$('#sq').value='';$('#sb').textContent='加入';$('#sc').classList.add('hide')}
 async function toggleShop(id,v){await sb.from('shopping').update({done:v,done_by:v?myName():null,done_at:v?new Date().toISOString():null}).eq('id',id);loadShop()}
 async function delShop(id){await sb.from('shopping').delete().eq('id',id);loadShop()}
 async function clearDone(){if(shop.some(s=>s.done)&&confirm('清除所有已購買的項目？')){await sb.from('shopping').delete().eq('done',true);loadShop()}}
