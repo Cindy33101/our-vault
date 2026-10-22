@@ -41,6 +41,7 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 .ev-dot{display:block;font-size:10px;color:#f5c542}.s .ev-dot{color:#b8860b}
 #v-msg .row{align-items:flex-end}.row textarea{margin:0;resize:none}
 .tabs{gap:6px}.tabs button{padding:10px 2px;font-size:15px}
+.srow{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;transition:transform .1s}
 .hide{display:none}
 .msgs{min-height:40vh}
 </style>
@@ -305,12 +306,12 @@ async function delEv(id){if(confirm('刪除這個行程？')){await sb.from('eve
 let shop=[],shopEditId=null;
 async function loadShop(){const{data}=await sb.from('shopping').select('*').order('created_at');shop=data||[];shop.forEach((s,i)=>{if(s.sort_order==null)s.sort_order=i+1});drawShop()}
 function shopRow(s){
-  return `<div class="card srow ${s.done?'sdone':''}" data-sid="${s.id}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;${s.done?'opacity:.55':''}">${s.done?'':`<span style="cursor:grab;touch-action:none;user-select:none;padding:4px 2px;font-size:20px;opacity:.6;flex:none" onpointerdown="dragStart(event)" onpointermove="dragMove(event)" onpointerup="dragEnd(event)" onpointercancel="dragEnd(event)">☰</span>`}<input type="checkbox" ${s.done?'checked':''} style="width:22px;height:22px;margin:0;padding:0;flex:none" onchange="toggleShop('${s.id}',this.checked)"><div style="flex:1;${s.done?'text-decoration:line-through':''}">${esc(s.name)}${s.qty?` <small>× ${esc(s.qty)}</small>`:''}<br><small style="opacity:.6">${s.done?esc(s.done_by)+' 已買':esc(s.author_name)+' 加入'}</small></div><button class="ghost" onclick="editShop('${s.id}')">編輯</button><button class="ghost" onclick="delShop('${s.id}')">✕</button></div>`;
+  return `<div class="card srow ${s.done?'sdone':''}" data-sid="${s.id}" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;${s.done?'opacity:.55':''}"><input type="checkbox" ${s.done?'checked':''} style="width:22px;height:22px;margin:0;padding:0;flex:none" onchange="toggleShop('${s.id}',this.checked)"><div style="flex:1;${s.done?'text-decoration:line-through':''}">${esc(s.name)}${s.qty?` <small>× ${esc(s.qty)}</small>`:''}<br><small style="opacity:.6">${s.done?esc(s.done_by)+' 已買':esc(s.author_name)+' 加入'}</small></div><button class="ghost" onclick="editShop('${s.id}')">編輯</button><button class="ghost" onclick="delShop('${s.id}')">✕</button></div>`;
 }
 function drawShop(){
   const t=shop.filter(s=>!s.done).sort((a,b)=>a.sort_order-b.sort_order),d=shop.filter(s=>s.done);
   $('#slist').innerHTML=('<div id="stodo">'+(t.map(shopRow).join('')||'<p style="opacity:.6">清單是空的</p>')+'</div>')+(d.length?`<p style="opacity:.6;margin:12px 0 6px">已購買（${d.length}）</p>`+d.map(shopRow).join(''):'');
-  $('#scnt').textContent='待買 '+t.length+' 項';
+  $('#scnt').textContent='待買 '+t.length+' 項'+(t.length>1?' · 長按項目可拖曳排序':'');
 }
 async function addShop(){
   const name=$('#sn').value.trim();if(!name)return;
@@ -319,21 +320,27 @@ async function addShop(){
   if(error)return alert('儲存失敗：'+error.message+'（請確認已執行 shopping.sql 與 shopping_order.sql）');
   cancelShop();loadShop();
 }
-let drag=null;
-function dragStart(e){
-  e.preventDefault();drag=e.target.closest('.srow');
-  drag.style.opacity='.6';drag.style.background='#3a3a3a';e.target.setPointerCapture(e.pointerId);
-}
-function dragMove(e){
+let drag=null,lp=null,sx=0,sy=0;
+$('#slist').addEventListener('pointerdown',e=>{
+  const el=e.target.closest('#stodo .srow');
+  if(!el||e.target.closest('input,button'))return;
+  sx=e.clientX;sy=e.clientY;clearTimeout(lp);
+  lp=setTimeout(()=>{drag=el;el.style.opacity='.6';el.style.background='#3a3a3a';el.style.transform='scale(1.02)';navigator.vibrate&&navigator.vibrate(30)},450);
+});
+$('#slist').addEventListener('contextmenu',e=>e.preventDefault());
+document.addEventListener('pointermove',e=>{
+  if(lp&&!drag&&Math.hypot(e.clientX-sx,e.clientY-sy)>8){clearTimeout(lp);lp=null}
   if(!drag)return;
   const over=document.elementFromPoint(e.clientX,e.clientY)?.closest('.srow');
   if(!over||over===drag||over.parentNode!==drag.parentNode)return;
   const r=over.getBoundingClientRect();
   over.parentNode.insertBefore(drag,e.clientY<r.top+r.height/2?over:over.nextSibling);
-}
-async function dragEnd(){
+});
+document.addEventListener('touchmove',e=>{if(drag)e.preventDefault()},{passive:false});
+async function endDrag(){
+  clearTimeout(lp);lp=null;
   if(!drag)return;
-  drag.style.opacity='';drag.style.background='';drag=null;
+  drag.style.opacity=drag.style.background=drag.style.transform='';drag=null;
   const ups=[];
   [...document.querySelectorAll('#stodo .srow')].forEach((el,i)=>{
     const s=shop.find(x=>x.id===el.dataset.sid);
@@ -343,6 +350,7 @@ async function dragEnd(){
   if(rs.some(r=>r.error))alert('排序失敗：請確認已執行 shopping_order.sql');
   loadShop();
 }
+document.addEventListener('pointerup',endDrag);document.addEventListener('pointercancel',endDrag);
 function editShop(id){
   const s=shop.find(x=>x.id===id);shopEditId=id;
   $('#sn').value=s.name;$('#sq').value=s.qty||'';$('#sb').textContent='更新';$('#sc').classList.remove('hide');$('#sn').focus();window.scrollTo(0,0);
