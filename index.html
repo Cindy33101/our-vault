@@ -111,6 +111,13 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 </div>
 
 </div>
+<div id="pv" style="display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.94);flex-direction:column">
+  <div style="display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top,0px) + 8px) 12px 8px;color:#e6e6e6">
+    <span id="pvn" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+    <button class="ghost" onclick="dlPv()">下載</button><button onclick="closePv()">關閉</button>
+  </div>
+  <div id="pvb" style="flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center"></div>
+</div>
 <script>
 const SUPABASE_URL='https://noszxojrpvjewtttzwer.supabase.co';
 const SUPABASE_KEY='sb_publishable_P_TXSnNEHaGh5jwDFS5RDA_8EcdalyY';
@@ -184,7 +191,7 @@ async function signed(p,dl){const{data}=await sb.storage.from('shared-files').cr
 async function previews(list,pre){
   for(const i of list)if(i.file_path&&/\.(png|jpe?g|gif|webp)$/i.test(i.file_name)){
     const u=await signed(i.file_path),b=document.querySelector(`#${pre}-${i.id} .pvbox`);
-    if(u&&b)b.innerHTML=`<img class="pv" src="${u}" loading="lazy">`;
+    if(u&&b)b.innerHTML=`<img class="pv" src="${u}" loading="lazy" onclick="openFile('${i.id}','${pre}')" style="cursor:zoom-in">`;
   }
 }
 async function loadMsgs(){
@@ -228,7 +235,7 @@ async function drawItems(){
   const list=items.filter(i=>(!tag||(i.tags||[]).includes(tag))&&(!q||[i.title,i.content,i.file_name,...(i.tags||[])].some(s=>(s||'').toLowerCase().includes(q)))).sort((a,b)=>b.pinned-a.pinned);
   $('#items').innerHTML=list.map(i=>`<div class="card" id="i-${i.id}">
     <div class="meta"><span>${esc(i.author_name)} · ${fmt(i.created_at)}</span>
-    <span><button class="ghost ${i.pinned?'pin':''}" onclick="pin('${i.id}')">${i.pinned?'★':'☆'}</button>${i.kind==='text'?`<button class="ghost" onclick="copyText('${i.id}')">複製</button><button class="ghost" onclick="editItem('${i.id}')">編輯</button>`:`<button class="ghost" onclick="openFile('${i.id}')">開啟</button>`}${i.author_id===me.id?`<button class="ghost" onclick="delItem('${i.id}')">刪除</button>`:''}</span></div>
+    <span><button class="ghost ${i.pinned?'pin':''}" onclick="pin('${i.id}')">${i.pinned?'★':'☆'}</button>${i.kind==='text'?`<button class="ghost" onclick="copyText('${i.id}')">複製</button><button class="ghost" onclick="editItem('${i.id}')">編輯</button>`:`<button class="ghost" onclick="openFile('${i.id}')">預覽</button>`}${i.author_id===me.id?`<button class="ghost" onclick="delItem('${i.id}')">刪除</button>`:''}</span></div>
     ${i.title?`<b>${esc(i.title)}</b>`:''}
     ${i.kind==='text'?`<pre>${link(i.content)}</pre>`:`<div>📎 ${esc(i.file_name)} <small>(${size(i.file_size)})</small></div><div class="pvbox"></div>`}
     <div>${(i.tags||[]).map(t=>`<span class="chip" data-t="${esc(t)}" onclick="pickTag(this.dataset.t)">#${esc(t)}</span>`).join('')}</div>
@@ -257,10 +264,29 @@ async function addFiles(files){
   }
   $('#ti').value=$('#tg').value=$('#fi').value='';$('#up').textContent='';loadItems();
 }
+const pvType=n=>{const e=(n.split('.').pop()||'').toLowerCase();
+  return /^(png|jpe?g|gif|webp|bmp|svg|heic)$/.test(e)?'img':/^(mp4|mov|m4v|webm)$/.test(e)?'video':/^(mp3|m4a|wav|ogg|aac)$/.test(e)?'audio':e==='pdf'?'pdf':/^(txt|md|csv|json|log)$/.test(e)?'text':/^(docx?|xlsx?|pptx?)$/.test(e)?'office':'other'};
+let pvFile=null;
 async function openFile(id,src){
-  const i=(src==='m'?msgs:items).find(x=>x.id===id),u=await signed(i.file_path,i.file_name);
-  if(u)location.href=u;
+  const i=(src==='m'?msgs:items).find(x=>x.id===id);if(!i)return;
+  const b=$('#pvb');pvFile=i;$('#pvn').textContent=i.file_name;$('#pv').style.display='flex';
+  b.innerHTML='<p style="color:#aaa">載入中…</p>';
+  const u=await signed(i.file_path),t=pvType(i.file_name),box='max-width:100%;max-height:100%';
+  if(!u){b.innerHTML='<p style="color:#aaa">無法載入檔案</p>';return}
+  if(t==='img')b.innerHTML=`<img src="${u}" style="${box};object-fit:contain">`;
+  else if(t==='video')b.innerHTML=`<video src="${u}" controls playsinline autoplay style="${box}"></video>`;
+  else if(t==='audio')b.innerHTML=`<audio src="${u}" controls autoplay></audio>`;
+  else if(t==='pdf')b.innerHTML=`<iframe src="${u}" style="width:100%;height:100%;border:0;background:#fff"></iframe>`;
+  else if(t==='office')b.innerHTML=`<iframe src="https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(u)}" style="width:100%;height:100%;border:0;background:#fff"></iframe>`;
+  else if(t==='text'){try{const r=await fetch(u);b.innerHTML=`<pre style="align-self:flex-start;width:100%;padding:14px;margin:0;color:#e6e6e6;white-space:pre-wrap;word-break:break-word">${esc((await r.text()).slice(0,200000))}</pre>`}catch(e){b.innerHTML='<p style="color:#aaa">無法預覽此文字檔</p>'}}
+  else b.innerHTML='<p style="color:#aaa;padding:20px;text-align:center">此檔案類型無法直接預覽<br>請按右上角「下載」</p>';
 }
+function closePv(){$('#pv').style.display='none';$('#pvb').innerHTML='';pvFile=null}
+async function dlPv(){
+  if(!pvFile)return;const u=await signed(pvFile.file_path,pvFile.file_name);
+  if(u){const a=document.createElement('a');a.href=u;a.download=pvFile.file_name;a.click()}
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closePv()});
 const ymd=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 let evs=[],cur=new Date(),sel=ymd(new Date()),evEditId=null;
 async function loadEvs(){const{data}=await sb.from('events').select('*').order('event_date').order('event_time');evs=data||[];drawCal()}
