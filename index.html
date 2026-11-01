@@ -40,7 +40,8 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 .grid .t{outline:2px solid var(--accent)}.grid .s{background:var(--accent);color:var(--on-accent)}
 .ev-dot{display:block;font-size:10px;color:#f5c542}.s .ev-dot{color:#b8860b}
 #v-msg .row{align-items:flex-end}.row textarea{margin:0;resize:none}
-.tabs{gap:6px}.tabs button{padding:10px 2px;font-size:15px}
+.tabs{gap:4px}.tabs button{padding:6px 0;font-size:12px;line-height:1.35;flex:1 1 0;min-width:0}
+.bar{height:8px;background:var(--input);border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s}
 .srow{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;transition:transform .1s}
 .hide{display:none}
 .msgs{min-height:40vh}
@@ -60,16 +61,32 @@ input::placeholder,textarea::placeholder{color:#8a8a8a}
 <div id="app" class="hide">
   <h1>小倉庫 <span><button class="ghost" onclick="rename()" id="who"></button><button class="ghost" onclick="logout()">登出</button></span></h1>
   <div class="tabs">
-    <button id="t-msg" class="on" onclick="setTab('msg')">💬 留言<span id="dot"></span></button>
-    <button id="t-db" onclick="setTab('db')">🗂 資料庫</button>
-    <button id="t-cal" onclick="setTab('cal')">📅 行事曆</button>
-    <button id="t-shop" onclick="setTab('shop')">🛒 採購</button>
+    <button id="t-msg" class="on" onclick="setTab('msg')">💬<br>留言<span id="dot"></span></button>
+    <button id="t-db" onclick="setTab('db')">🗂<br>資料庫</button>
+    <button id="t-cal" onclick="setTab('cal')">📅<br>行事曆</button>
+    <button id="t-shop" onclick="setTab('shop')">🛒<br>採購</button>
+    <button id="t-lists" onclick="setTab('lists')">✅<br>清單</button>
   </div>
 
   <div id="v-msg">
     <div id="msgs" class="msgs"></div>
     <div class="row"><textarea id="mb" rows="1" placeholder="留言給對方…" oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!matchMedia('(pointer:coarse)').matches){event.preventDefault();sendMsg()}"></textarea><button onclick="$('#mf').click()" style="background:#4a4a4a;color:#fff">📎</button><button onclick="sendMsg()">送出</button></div>
     <input id="mf" type="file" class="hide" onchange="sendMsgFile(this.files[0])">
+  </div>
+
+  <div id="v-lists" class="hide">
+    <div id="lv-all">
+      <div class="row"><input id="ln" placeholder="新增清單（例如：日本旅遊）" onkeydown="if(event.key==='Enter')addList()"><button onclick="addList()">建立</button></div>
+      <div id="lcards" style="margin-top:10px"></div>
+    </div>
+    <div id="lv-one" class="hide">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px"><button class="ghost" onclick="openList(null)">‹ 所有清單</button><span><button class="ghost" onclick="renameList()">改名</button><button class="ghost" onclick="delList()">刪除清單</button></span></div>
+      <h2 id="lt" style="margin:4px 0 8px;font-size:20px"></h2>
+      <div class="bar"><i id="lbar"></i></div><div class="meta" id="lprog" style="margin:4px 0 10px"></div>
+      <div class="row"><input id="li" placeholder="新增項目…" onkeydown="if(event.key==='Enter')addLi()"><button onclick="addLi()">加入</button></div>
+      <div id="litems" style="margin-top:10px"></div>
+      <div class="meta"><span>點項目文字可修改</span><button class="ghost" onclick="clearLiDone()">清除已完成</button></div>
+    </div>
   </div>
 
   <div id="v-shop" class="hide">
@@ -136,13 +153,15 @@ async function init(){
   $('#app').classList.toggle('hide',!me);
   if(!me)return;
   $('#who').textContent=myName()+' ✎';
-  await Promise.all([loadReads(),loadMsgs(),loadItems(),loadEvs(),loadShop()]);
+  await Promise.all([loadReads(),loadMsgs(),loadItems(),loadEvs(),loadShop(),loadLists()]);
   sb.channel('shared')
     .on('postgres_changes',{event:'*',schema:'public',table:'messages'},loadMsgs)
     .on('postgres_changes',{event:'*',schema:'public',table:'items'},loadItems)
     .on('postgres_changes',{event:'*',schema:'public',table:'reads'},loadReads)
     .on('postgres_changes',{event:'*',schema:'public',table:'events'},loadEvs)
     .on('postgres_changes',{event:'*',schema:'public',table:'shopping'},loadShop)
+    .on('postgres_changes',{event:'*',schema:'public',table:'lists'},loadLists)
+    .on('postgres_changes',{event:'*',schema:'public',table:'list_items'},loadLists)
     .subscribe();
 }
 async function login(){
@@ -159,7 +178,7 @@ let reads=[],tag='',tab='msg',editId=null;
 const link=s=>esc(s).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
 const used=()=>[...items,...msgs].reduce((n,x)=>n+(x.file_size||0),0);
 function setTab(t){
-  tab=t;for(const k of['msg','db','cal','shop']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
+  tab=t;for(const k of['msg','db','cal','shop','lists']){$('#v-'+k).classList.toggle('hide',k!==t);$('#t-'+k).classList.toggle('on',k===t)}
   if(t==='msg'){markRead();window.scrollTo(0,document.body.scrollHeight)}else badge();
 }
 async function markRead(){await sb.from('reads').upsert({user_id:me.id,last_read:new Date().toISOString()});loadReads()}
@@ -385,8 +404,57 @@ function cancelShop(){shopEditId=null;$('#sn').value=$('#sq').value='';$('#sb').
 async function toggleShop(id,v){await sb.from('shopping').update({done:v,done_by:v?myName():null,done_at:v?new Date().toISOString():null}).eq('id',id);loadShop()}
 async function delShop(id){await sb.from('shopping').delete().eq('id',id);loadShop()}
 async function clearDone(){if(shop.some(s=>s.done)&&confirm('清除所有已購買的項目？')){await sb.from('shopping').delete().eq('done',true);loadShop()}}
+let lists=[],litems=[],curList=null;
+async function loadLists(){
+  const[a,b]=await Promise.all([sb.from('lists').select('*').order('created_at'),sb.from('list_items').select('*').order('created_at')]);
+  lists=a.data||[];litems=b.data||[];
+  if(curList&&!lists.find(l=>l.id===curList))curList=null;
+  drawLists();
+}
+function openList(id){curList=id;drawLists()}
+function drawLists(){
+  $('#lv-all').classList.toggle('hide',!!curList);$('#lv-one').classList.toggle('hide',!curList);
+  if(!curList){
+    $('#lcards').innerHTML=lists.map(l=>{
+      const it=litems.filter(x=>x.list_id===l.id),d=it.filter(x=>x.done).length,p=it.length?Math.round(d/it.length*100):0;
+      return `<div class="card" onclick="openList('${l.id}')" style="cursor:pointer"><div style="display:flex;justify-content:space-between"><b>${esc(l.name)}</b><span>${d}/${it.length}</span></div><div class="bar" style="margin-top:8px"><i style="width:${p}%"></i></div></div>`;
+    }).join('')||'<p style="opacity:.6">還沒有清單，建立第一個吧～</p>';
+    return;
+  }
+  const l=lists.find(x=>x.id===curList),it=litems.filter(x=>x.list_id===curList),d=it.filter(x=>x.done).length;
+  $('#lt').textContent=l.name;$('#lbar').style.width=(it.length?d/it.length*100:0)+'%';$('#lprog').textContent=`已完成 ${d} / ${it.length}`;
+  $('#litems').innerHTML=[...it.filter(x=>!x.done),...it.filter(x=>x.done)].map(x=>`<div class="card" style="display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:6px;${x.done?'opacity:.55':''}"><input type="checkbox" ${x.done?'checked':''} style="width:22px;height:22px;margin:0;padding:0;flex:none" onchange="toggleLi('${x.id}',this.checked)"><div style="flex:1;${x.done?'text-decoration:line-through':''}" onclick="editLi('${x.id}')">${esc(x.text)}<br><small style="opacity:.6">${x.done?esc(x.done_by)+' 完成':esc(x.author_name)+' 加入'}</small></div><button class="ghost" onclick="delLi('${x.id}')">✕</button></div>`).join('')||'<p style="opacity:.6">這份清單還是空的</p>';
+}
+async function addList(){
+  const name=$('#ln').value.trim();if(!name)return;
+  const{data,error}=await sb.from('lists').insert({name,author_name:myName()}).select().single();
+  if(error)return alert('建立失敗：'+error.message+'（請確認已執行 lists.sql）');
+  $('#ln').value='';curList=data.id;loadLists();
+}
+async function renameList(){
+  const l=lists.find(x=>x.id===curList),n=prompt('清單名稱',l.name);if(!n||!n.trim())return;
+  await sb.from('lists').update({name:n.trim()}).eq('id',curList);loadLists();
+}
+async function delList(){if(confirm('刪除整份清單與裡面所有項目？')){await sb.from('lists').delete().eq('id',curList);curList=null;loadLists()}}
+async function addLi(){
+  const text=$('#li').value.trim();if(!text)return;
+  const{error}=await sb.from('list_items').insert({list_id:curList,text,author_name:myName()});
+  if(error)return alert('新增失敗：'+error.message);
+  $('#li').value='';loadLists();
+}
+async function toggleLi(id,v){await sb.from('list_items').update({done:v,done_by:v?myName():null}).eq('id',id);loadLists()}
+async function editLi(id){
+  const x=litems.find(i=>i.id===id),t=prompt('修改項目',x.text);if(!t||!t.trim())return;
+  await sb.from('list_items').update({text:t.trim()}).eq('id',id);loadLists();
+}
+async function delLi(id){await sb.from('list_items').delete().eq('id',id);loadLists()}
+async function clearLiDone(){
+  if(litems.some(x=>x.list_id===curList&&x.done)&&confirm('清除這份清單已完成的項目？')){
+    await sb.from('list_items').delete().eq('list_id',curList).eq('done',true);loadLists();
+  }
+}
 function exportAll(){
-  const b=new Blob([JSON.stringify({items,messages:msgs,events:evs,shopping:shop},null,1)],{type:'application/json'});
+  const b=new Blob([JSON.stringify({items,messages:msgs,events:evs,shopping:shop,lists,list_items:litems},null,1)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='小倉庫備份_'+new Date().toISOString().slice(0,10)+'.json';a.click();
 }
 function copyText(id){
